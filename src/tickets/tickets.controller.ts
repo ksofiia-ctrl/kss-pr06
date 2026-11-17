@@ -10,16 +10,40 @@ import {
   Post,
   Query,
   Res,
+  StandardSchemaValidationPipe,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { PageQueryDto, type Page } from '../common/page.js';
 import { ChangeStatusDto } from './dto/change-status.dto.js';
 import { CreateCommentDto } from './dto/create-comment.dto.js';
-import { CreateTicketDto } from './dto/create-ticket.dto.js';
+import {
+  createTicketSchema,
+  type CreateTicketSchemaInput,
+} from './dto/create-ticket.schema.js';
 import { TicketsQueryDto } from './dto/tickets-query.dto.js';
 import { UpdateTicketDto } from './dto/update-ticket.dto.js';
 import type { Comment, Ticket } from './ticket.model.js';
 import { TicketsService } from './tickets.service.js';
+
+/** Пайп для перевірки тіла схемою Zod; помилки у форматі { field, message } з кодом 422. */
+const zodPipe = new StandardSchemaValidationPipe({
+  exceptionFactory: (issues) =>
+    new UnprocessableEntityException({
+      message: 'Дані не відповідають вимогам',
+      errors: issues.flatMap((issue) => {
+        const path = (issue.path ?? [])
+          .map((p) => String(typeof p === 'object' ? p.key : p))
+          .join('.');
+        if (path) return [{ field: path, message: issue.message }];
+        // .strict(): назви зайвих полів є лише в тексті повідомлення
+        const keys = [...issue.message.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+        return keys.length
+          ? keys.map((field) => ({ field, message: issue.message }))
+          : [{ field: '', message: issue.message }];
+      }),
+    }),
+});
 
 @Controller('tickets')
 export class TicketsController {
@@ -36,14 +60,15 @@ export class TicketsController {
   }
 
   @Post()
-  async create(
-    @Body() body: CreateTicketDto,
-    @Res({ passthrough: true }) res: Response,
-  ): Promise<Ticket> {
-    const created = await this.tickets.create(body);
-    res.location(`/api/v1/tickets/${created.id}`);
-    return created;
-  }
+async create(
+  @Body({ schema: createTicketSchema, pipes: [zodPipe] })
+  body: CreateTicketSchemaInput,
+  @Res({ passthrough: true }) res: Response,
+): Promise<Ticket> {
+  const created = await this.tickets.create(body);
+  res.location(`/api/v1/tickets/${created.id}`);
+  return created;
+}
 
   @Patch(':ticketId')
   update(
